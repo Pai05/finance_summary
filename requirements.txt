@@ -1,0 +1,9 @@
+Flask 
+python-dotenv
+ requests 
+beautifulsoup4 
+selenium 
+webdriver-manager 
+newspaper3k
+ google-generativeai 
+gunicorn
