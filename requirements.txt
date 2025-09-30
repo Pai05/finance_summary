@@ -9,4 +9,3 @@ apscheduler
 newspaper3k
 lxml-html-clean
 gunicorn
-webdriver-manager
