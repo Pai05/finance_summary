@@ -1,4 +1,3 @@
- 
 import os
 import sqlite3
 from flask import Flask, render_template, request, redirect, url_for
@@ -9,63 +8,62 @@ from db_manager import get_db_connection
 from datetime import date, timedelta
 import json
 
+# Load environment variables from .env file at the start
 load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
 
-POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
     conn = get_db_connection()
     
-    # Handle adding a new ticker
+    # Handle the form submission for adding a new ticker
     if request.method == 'POST':
         ticker = request.form['ticker'].upper().strip()
         if ticker:
             try:
-                conn.execute('INSERT INTO tickers (symbol) VALUES (?)', (ticker,))
+                # Add the new ticker to the database; ignore if it already exists
+                conn.execute('INSERT OR IGNORE INTO tickers (symbol) VALUES (?)', (ticker,))
                 conn.commit()
-            except sqlite3.IntegrityError:
-                # Ticker already exists, do nothing
-                pass
-        return redirect(url_for('index'))
+            except sqlite3.Error as e:
+                print(f"Database error on insert: {e}")
+        return redirect(url_for('index', ticker=ticker))
 
-    # Get data for display
+    # Fetch all tracked tickers to display in the sidebar
     tickers = conn.execute('SELECT symbol FROM tickers ORDER BY symbol').fetchall()
     
+    # Determine which ticker is currently selected
     selected_ticker = request.args.get('ticker')
     if not selected_ticker and tickers:
         selected_ticker = tickers[0]['symbol']
     
-    today = date.today()
+    # Fetch historical summaries for the selected ticker
     summaries = []
-    
     if selected_ticker:
-        # Fetch summaries for the last 7 days + today
-        for i in range(8):
+        today = date.today()
+        for i in range(8): # Fetch today + the last 7 days
             current_date = today - timedelta(days=i)
             summary_data = conn.execute(
                 'SELECT summary_date, summary_text, sources FROM summaries WHERE ticker_symbol = ? AND summary_date = ?',
                 (selected_ticker, current_date.isoformat())
             ).fetchone()
+            
             if summary_data:
-                # Safely parse JSON sources
                 try:
+                    # The 'sources' column is a JSON string; parse it into a Python list
                     sources_list = json.loads(summary_data['sources'])
                 except (json.JSONDecodeError, TypeError):
-                    sources_list = [] # Default to empty list on error
+                    sources_list = [] # Default to an empty list if parsing fails
                 
                 summaries.append({
                     'date': summary_data['summary_date'],
                     'text': summary_data['summary_text'],
                     'sources': sources_list
                 })
-
     conn.close()
     
+    # Render the main page with all the necessary data
     return render_template('index.html', 
                            tickers=tickers, 
                            selected_ticker=selected_ticker, 
@@ -73,72 +71,61 @@ def index():
 
 @app.route('/refresh/<ticker>')
 def refresh_ticker(ticker):
-    """Manually triggers a refresh for a specific ticker."""
-    print(f"Manual refresh triggered for {ticker}")
+    """Manually triggers a news scrape and AI summary generation for a specific ticker."""
+    print(f"--- Manual refresh triggered for {ticker} ---")
     conn = get_db_connection()
-    today_str = date.today().isoformat()
-
-    # 1. Check if summary for today already exists
-    exists = conn.execute(
-        'SELECT 1 FROM summaries WHERE ticker_symbol = ? AND summary_date = ?',
-        (ticker, today_str)
-    ).fetchone()
-
-    if exists:
-        print(f"Summary for {ticker} on {today_str} already exists. Skipping.")
-        conn.close()
-        return redirect(url_for('index', ticker=ticker))
-
-    # 2. Fetch historical summary for context
-    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
-    historical_summary_row = conn.execute(
-        'SELECT summary_text FROM summaries WHERE ticker_symbol = ? AND summary_date = ?',
-        (ticker, yesterday_str)
-    ).fetchone()
-    historical_summary = historical_summary_row['summary_text'] if historical_summary_row else None
-
-    # 3. Scrape and Process
+    
     try:
+        # 1. Get the summary from the previous day to provide context to the AI
+        yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+        historical_row = conn.execute(
+            'SELECT summary_text FROM summaries WHERE ticker_symbol = ? AND summary_date = ?',
+            (ticker, yesterday_str)
+        ).fetchone()
+        historical_summary = historical_row['summary_text'] if historical_row else None
+
+        # 2. Scrape all news sources
         print(f"Collecting news for {ticker}...")
-        all_articles = consolidate_news(POLYGON_API_KEY, ticker)
+        all_articles = consolidate_news(ticker) # No need to pass API key here
         
         if not all_articles:
             print(f"No articles found for {ticker}.")
-            conn.close()
             return redirect(url_for('index', ticker=ticker))
 
-        print(f"Selecting top articles for {ticker}...")
-        selected_titles = select_top_articles(GEMINI_API_KEY, all_articles, ticker)
+        # 3. AI Step 1: Select the most important articles
+        # This function now correctly returns a list of article DICTIONARIES
+        selected_articles = select_top_articles(all_articles, ticker)
         
-        selected_articles = [article for article in all_articles if article['title'] in selected_titles]
-        
+        # 4. Get the full text for only the selected articles
         articles_with_text = []
         for article in selected_articles:
             print(f"Getting full text for: {article['url']}")
-            article['text'] = get_full_article_text(article['url'])
-            if article['text']:
+            article_text = get_full_article_text(article['url'])
+            if article_text:
+                article['text'] = article_text # Add the full text to the dictionary
                 articles_with_text.append(article)
         
         if not articles_with_text:
             print(f"Could not retrieve text for any selected articles for {ticker}.")
-            conn.close()
             return redirect(url_for('index', ticker=ticker))
 
-        print(f"Generating summary for {ticker}...")
-        final_summary = generate_summary_with_ai(GEMINI_API_KEY, articles_with_text, ticker, historical_summary)
+        # 5. AI Step 2: Generate the final summary using the full text
+        final_summary = generate_summary_with_ai(articles_with_text, ticker, historical_summary)
         
-        # 4. Save to DB
+        # 6. Save the new summary and its sources to the database
         sources_json = json.dumps([{'title': a['title'], 'url': a['url']} for a in articles_with_text])
+        today_str = date.today().isoformat()
         
+        # Use INSERT OR REPLACE to either add a new summary or update an existing one for today
         conn.execute(
-            'INSERT INTO summaries (ticker_symbol, summary_date, summary_text, sources) VALUES (?, ?, ?, ?)',
+            'INSERT OR REPLACE INTO summaries (ticker_symbol, summary_date, summary_text, sources) VALUES (?, ?, ?, ?)',
             (ticker, today_str, final_summary, sources_json)
         )
         conn.commit()
         print(f"Successfully saved summary for {ticker}.")
 
     except Exception as e:
-        print(f"An error occurred while refreshing {ticker}: {e}")
+        print(f"!!! An unexpected error occurred in refresh_ticker for {ticker}: {e}")
     finally:
         conn.close()
 
