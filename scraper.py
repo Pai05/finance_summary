@@ -1,14 +1,9 @@
 import os
 import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
 from newspaper import Article, ArticleException, Config
 import time
 from datetime import datetime, timedelta
-import uuid # Import the uuid module to generate unique IDs
 
 # --- Helper Functions ---
 
@@ -16,7 +11,7 @@ def get_full_article_text(url):
     """Downloads and parses a URL to get the main article text."""
     try:
         config = Config()
-        config.request_timeout = 20
+        config.request_timeout = 20 # 20 seconds
         
         article = Article(url, config=config)
         article.download()
@@ -69,67 +64,49 @@ def get_finviz_news(ticker):
     return articles
 
 def get_tradingview_news(ticker):
-    """Scrapes news from TradingView using Selenium for dynamic content."""
+    """
+    Scrapes news from TradingView using a lightweight requests/BeautifulSoup method.
+    This completely replaces the slow and heavy Selenium implementation.
+    """
     articles = []
-    driver = None # Initialize driver to None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
 
-    try:
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920x1080")
-        
-        user_data_dir = f"/tmp/chrome-user-data-{uuid.uuid4()}"
-        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-
-        # **FINAL PRODUCTION FIX: More robust check for Render environment**
-        chrome_driver_path = "/usr/bin/chromedriver"
-        if os.path.exists(chrome_driver_path):
-            print("Production environment detected. Using explicit driver path.")
-            chrome_options.binary_location = "/usr/bin/google-chrome"
-            service = Service(executable_path=chrome_driver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        else: # For local development
-            print("Local development environment detected. Using automatic driver setup.")
-            driver = webdriver.Chrome(options=chrome_options)
-
-        exchanges = ["NASDAQ", "NYSE"]
-        for exchange in exchanges:
-            url = f"https://www.tradingview.com/symbols/{exchange}-{ticker}/news/"
-            try:
-                driver.get(url)
-                time.sleep(5)
-                
-                news_elements = driver.find_elements(By.CSS_SELECTOR, 'a[class*="card-"]')
-                if news_elements:
-                    for elem in news_elements[:10]:
-                        try:
-                            href = elem.get_attribute('href')
-                            title_elem = elem.find_element(By.CSS_SELECTOR, 'span[class*="title-"]')
-                            title = title_elem.text
-                            if href and title:
-                                articles.append({'title': title, 'url': href})
-                        except Exception:
-                            continue
-                    break 
-            except Exception:
-                continue
-    
-    except Exception as e:
-        print(f"Error during Selenium setup or execution: {e}")
-        
-    finally:
-        if driver:
-            driver.quit()
+    exchanges = ["NASDAQ", "NYSE"]
+    for exchange in exchanges:
+        url = f"https://www.tradingview.com/symbols/{exchange}-{ticker}/news/"
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
             
+            soup = BeautifulSoup(response.content, 'lxml')
+            # Find news items by looking for links with a specific data-widget-name attribute
+            news_elements = soup.find_all('a', {'data-widget-name': 'news-item-card-header'})
+
+            if news_elements:
+                for elem in news_elements[:10]:
+                    href = elem.get('href')
+                    # The title is the text content of the link
+                    title = elem.get_text(strip=True)
+                    if href and title:
+                        # Ensure the URL is absolute
+                        if not href.startswith('http'):
+                            href = 'https://www.tradingview.com' + href
+                        articles.append({'title': title, 'url': href})
+                return articles # Return as soon as we find news on one exchange
+        except requests.exceptions.RequestException as e:
+            print(f"Could not fetch TradingView news for {ticker} on {exchange}: {e}")
+            continue # Try the next exchange
+    
+    print(f"Could not find any TradingView news for {ticker} on any exchange.")
     return articles
 
 # --- Main Consolidator ---
 
 def consolidate_news(ticker):
     """Collects news from all sources and removes duplicates."""
+    print(f"Collecting news for {ticker}...")
     all_articles = []
     
     all_articles.extend(get_polygon_news(ticker))
@@ -143,5 +120,8 @@ def consolidate_news(ticker):
             unique_articles.append(article)
             seen_urls.add(article['url'])
             
+    if not unique_articles:
+        print(f"No articles found for {ticker}.")
+
     return unique_articles
 
