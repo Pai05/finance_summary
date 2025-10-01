@@ -81,15 +81,18 @@ def get_tradingview_news(ticker):
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920x1080")
         
-        # **PRODUCTION FIX: Add a unique user data directory to prevent session collisions**
         user_data_dir = f"/tmp/chrome-user-data-{uuid.uuid4()}"
         chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
 
-        if os.environ.get("RENDER"):
+        # **FINAL PRODUCTION FIX: More robust check for Render environment**
+        chrome_driver_path = "/usr/bin/chromedriver"
+        if os.path.exists(chrome_driver_path):
+            print("Production environment detected. Using explicit driver path.")
             chrome_options.binary_location = "/usr/bin/google-chrome"
-            service = Service(executable_path="/usr/bin/chromedriver")
+            service = Service(executable_path=chrome_driver_path)
             driver = webdriver.Chrome(service=service, options=chrome_options)
         else: # For local development
+            print("Local development environment detected. Using automatic driver setup.")
             driver = webdriver.Chrome(options=chrome_options)
 
         exchanges = ["NASDAQ", "NYSE"]
@@ -118,7 +121,6 @@ def get_tradingview_news(ticker):
         print(f"Error during Selenium setup or execution: {e}")
         
     finally:
-        # **PRODUCTION FIX: Ensure the driver is always quit**
         if driver:
             driver.quit()
             
