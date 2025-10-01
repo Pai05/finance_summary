@@ -8,10 +8,11 @@ services:
     envVars:
       - fromGroup: finance-keys
 
-  # The new Background Worker to process jobs
-  - type: worker
-    name: finance-summary-worker
+  # The background job, configured to run as a Cron Job every minute
+  - type: cron
+    name: finance-summary-job-runner
     env: python
+    schedule: "* * * * *" # This means "run every minute"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python worker.py"
     envVars:

@@ -20,11 +20,9 @@ def process_job(job):
     try:
         print(f"--- Processing job {job_id} for ticker: {ticker} ---")
         
-        # Mark the job as 'processing'
         conn.execute("UPDATE jobs SET status = 'processing' WHERE id = ?", (job_id,))
         conn.commit()
 
-        # --- Main Logic from refresh_ticker ---
         today_str = date.today().isoformat()
         yesterday_str = (date.today() - timedelta(days=1)).isoformat()
         
@@ -62,35 +60,31 @@ def process_job(job):
             (ticker, today_str, final_summary, sources_json)
         )
         
-        # Mark the job as 'complete'
         conn.execute("UPDATE jobs SET status = 'complete' WHERE id = ?", (job_id,))
         conn.commit()
         print(f"--- Successfully completed job {job_id} for {ticker} ---")
 
     except Exception as e:
         print(f"!!! CRITICAL ERROR processing job {job_id} for {ticker}: {e}")
-        # Mark the job as 'failed'
         conn.execute("UPDATE jobs SET status = 'failed' WHERE id = ?", (job_id,))
         conn.commit()
     finally:
         conn.close()
 
 def main():
-    """The main worker loop."""
-    print("Starting background worker...")
-    while True:
-        conn = get_db_connection()
-        # Find the oldest pending job
-        job_to_process = conn.execute(
-            "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
-        conn.close()
+    """The main worker function, designed to run once."""
+    print("Starting cron job worker...")
+    conn = get_db_connection()
+    job_to_process = conn.execute(
+        "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
+    ).fetchone()
+    conn.close()
 
-        if job_to_process:
-            process_job(job_to_process)
-        else:
-            # If no jobs, wait before checking again
-            time.sleep(10)
+    if job_to_process:
+        print(f"Found pending job {job_to_process['id']}. Processing...")
+        process_job(job_to_process)
+    else:
+        print("No pending jobs found. Exiting.")
 
 if __name__ == '__main__':
     main()
