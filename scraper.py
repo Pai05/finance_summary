@@ -8,22 +8,21 @@ from selenium.webdriver.chrome.options import Options
 from newspaper import Article, ArticleException, Config
 import time
 from datetime import datetime, timedelta
+import uuid # Import the uuid module to generate unique IDs
 
 # --- Helper Functions ---
 
 def get_full_article_text(url):
     """Downloads and parses a URL to get the main article text."""
     try:
-        # Set a longer timeout for newspaper3k downloads
         config = Config()
-        config.request_timeout = 20 # 20 seconds
+        config.request_timeout = 20
         
         article = Article(url, config=config)
         article.download()
         article.parse()
         return article.text
     except Exception as e:
-        # This provides a more detailed error message for debugging
         print(f"Warning: newspaper3k failed for {url}. Reason: {e}")
         return None
 
@@ -61,7 +60,6 @@ def get_finviz_news(ticker):
             for row in news_table.find_all('tr'):
                 link = row.a
                 if link:
-                    # **FIX: Handle partial URLs from Finviz**
                     href = link['href']
                     if href.startswith('/news/'):
                         href = 'https://finviz.com' + href
@@ -73,49 +71,57 @@ def get_finviz_news(ticker):
 def get_tradingview_news(ticker):
     """Scrapes news from TradingView using Selenium for dynamic content."""
     articles = []
+    driver = None # Initialize driver to None
+
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920x1080")
+        
+        # **PRODUCTION FIX: Add a unique user data directory to prevent session collisions**
+        user_data_dir = f"/tmp/chrome-user-data-{uuid.uuid4()}"
+        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+
+        if os.environ.get("RENDER"):
+            chrome_options.binary_location = "/usr/bin/google-chrome"
+            service = Service(executable_path="/usr/bin/chromedriver")
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        else: # For local development
+            driver = webdriver.Chrome(options=chrome_options)
+
+        exchanges = ["NASDAQ", "NYSE"]
+        for exchange in exchanges:
+            url = f"https://www.tradingview.com/symbols/{exchange}-{ticker}/news/"
+            try:
+                driver.get(url)
+                time.sleep(5)
+                
+                news_elements = driver.find_elements(By.CSS_SELECTOR, 'a[class*="card-"]')
+                if news_elements:
+                    for elem in news_elements[:10]:
+                        try:
+                            href = elem.get_attribute('href')
+                            title_elem = elem.find_element(By.CSS_SELECTOR, 'span[class*="title-"]')
+                            title = title_elem.text
+                            if href and title:
+                                articles.append({'title': title, 'url': href})
+                        except Exception:
+                            continue
+                    break 
+            except Exception:
+                continue
     
-    # **PRODUCTION FIX: Optimize Selenium for Render's environment**
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920x1080")
-
-    # This block tells Selenium exactly where to find Chrome on the Render server
-    if os.environ.get("RENDER"):
-        chrome_options.binary_location = "/usr/bin/google-chrome"
-        service = Service(executable_path="/usr/bin/chromedriver")
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-    else: # For local development
-        driver = webdriver.Chrome(options=chrome_options)
-
-    # Make the scraper smarter by trying both NASDAQ and NYSE
-    exchanges = ["NASDAQ", "NYSE"]
-    found_news = False
-    for exchange in exchanges:
-        url = f"https://www.tradingview.com/symbols/{exchange}-{ticker}/news/"
-        try:
-            driver.get(url)
-            time.sleep(5)
+    except Exception as e:
+        print(f"Error during Selenium setup or execution: {e}")
+        
+    finally:
+        # **PRODUCTION FIX: Ensure the driver is always quit**
+        if driver:
+            driver.quit()
             
-            news_elements = driver.find_elements(By.CSS_SELECTOR, 'a[class*="card-"]')
-            if news_elements:
-                found_news = True
-                for elem in news_elements[:10]:
-                    try:
-                        href = elem.get_attribute('href')
-                        title_elem = elem.find_element(By.CSS_SELECTOR, 'span[class*="title-"]')
-                        title = title_elem.text
-                        if href and title:
-                            articles.append({'title': title, 'url': href})
-                    except Exception:
-                        continue
-                break # Exit the loop once news is found
-        except Exception:
-            continue # Try the next exchange if this one fails
-
-    driver.quit()
     return articles
 
 # --- Main Consolidator ---
