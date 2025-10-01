@@ -1,49 +1,19 @@
-# render.yaml
-# This file defines the entire infrastructure for the Financial News Summarizer.
-# It tells Render how to build and deploy both the web service and the daily cron job.
-
 services:
-  # -----------------
-  #  1. The Web Service (your live website)
-  # -----------------
+  # The Web Service for the user interface
   - type: web
     name: finance-summary-app
     env: python
-    pythonVersion: '3.11' # Specify a stable Python version
-    
-    # Add the buildpacks here to install Google Chrome and the driver
-    buildpacks:
-      - https://github.com/heroku/heroku-buildpack-google-chrome
-      - https://github.com/heroku/heroku-buildpack-chromedriver
-      
-    # Define the build and start commands
     buildCommand: "./build.sh"
-    startCommand: "gunicorn --workers 1 --timeout 120 app:app"
-    
-    # Link to the environment group for API keys
+    startCommand: "gunicorn --workers 2 --timeout 120 app:app"
     envVars:
       - fromGroup: finance-keys
-        
-    # Use the free instance type
-    plan: free
 
-  # -----------------
-  #  2. The Cron Job (your daily scheduler)
-  # -----------------
-  - type: cron
-    name: daily-summary-job
+  # The new Background Worker to process jobs
+  - type: worker
+    name: finance-summary-worker
     env: python
-    pythonVersion: '3.11'
-    
-    # Schedule to run at 8:00 AM IST (2:30 AM UTC)
-    schedule: "30 2 * * *"
-    
-    # Command to run the scheduler script
-    command: "python scheduler.py"
-    
-    # Link to the environment group for API keys
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python worker.py"
     envVars:
       - fromGroup: finance-keys
-      
-    # Use the free instance type
-    plan: free
+

@@ -1,87 +1,108 @@
- {% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block content %}
-<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+<div class="main-content">
     {% if selected_ticker %}
-        <h1 class="h2">Daily Summary for <span class="ticker-highlight">{{ selected_ticker }}</span></h1>
-        <a href="{{ url_for('refresh_ticker', ticker=selected_ticker) }}" class="btn btn-sm btn-outline-secondary">
-            Refresh Now
-        </a>
+        <div class="summary-header">
+            <h1>Daily Summary for <span class="ticker-highlight">{{ selected_ticker }}</span></h1>
+            <form action="{{ url_for('refresh_ticker', ticker=selected_ticker) }}" method="get" id="refresh-form">
+                <button type="submit" class="refresh-btn" id="refresh-button">
+                    <span id="refresh-spinner" class="spinner" style="display: none;"></span>
+                    <span id="refresh-text">Refresh Now</span>
+                </button>
+            </form>
+        </div>
+
+        {% if processing_job %}
+        <div class="card processing-card">
+            <div class="card-body">
+                <div class="processing-content">
+                    <div class="spinner-big"></div>
+                    <h2 class="card-title">Processing Summary</h2>
+                    <p class="card-text">A new summary for {{ selected_ticker }} is being generated. This page will automatically refresh when it's ready (usually within 1-2 minutes).</p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if summaries %}
+            {% for summary in summaries %}
+            <div class="card summary-card">
+                <div class="card-body">
+                    <h2 class="card-title">Summary for {{ summary.date }}</h2>
+                    <p class="card-text">{{ summary.text | safe }}</p>
+                </div>
+            </div>
+            {% if summary.sources %}
+            <div class="card sources-card">
+                <div class="card-body">
+                    <h3 class="card-title">Sources for Summary on {{ summary.date }}</h3>
+                    <ul class="sources-list">
+                        {% for source in summary.sources %}
+                        <li><a href="{{ source.url }}" target="_blank" rel="noopener noreferrer">{{ source.title }}</a></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        {% elif not processing_job %}
+        <div class="card no-summary-card">
+            <div class="card-body">
+                <h2 class="card-title">No Summary Available</h2>
+                <p class="card-text">There is no summary available for {{ selected_ticker }} yet. Click the "Refresh Now" button to generate the first summary.</p>
+            </div>
+        </div>
+        {% endif %}
+
     {% else %}
-        <h1 class="h2">Welcome!</h1>
+        <div class="card no-summary-card">
+            <div class="card-body">
+                <h2 class="card-title">Welcome</h2>
+                <p class="card-text">Please add a stock ticker on the left to get started.</p>
+            </div>
+        </div>
     {% endif %}
 </div>
 
-{% if not tickers %}
-<div class="alert alert-info" role="alert">
-  You are not tracking any stocks yet. Add a ticker symbol using the form on the right to get started!
-</div>
-{% elif not selected_ticker %}
-<div class="alert alert-info" role="alert">
-  Please select a stock from the list on the right to view its summary.
-</div>
-{% elif not summaries %}
-<div class="card summary-card">
-    <div class="card-body">
-        <h5 class="card-title">No Summary Available</h5>
-        <p class="card-text">
-            There is no summary available for {{ selected_ticker }} yet.
-            Click the "Refresh Now" button to generate the first summary, or wait for the next daily update.
-        </p>
-    </div>
-</div>
-{% else %}
-    <!-- Today's Summary -->
-    <div class="row">
-        <div class="col-lg-8">
-            <div class="card summary-card mb-4">
-                <div class="card-header">
-                    Summary for {{ summaries[0].date }}
-                </div>
-                <div class="card-body">
-                    <p style="white-space: pre-wrap;">{{ summaries[0].text }}</p>
-                </div>
-            </div>
-            <!-- Historical Summaries -->
-            {% if summaries|length > 1 %}
-            <h3 class="h4 mt-4">Historical Summaries</h3>
-            <div class="accordion" id="historyAccordion">
-                {% for summary in summaries[1:] %}
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="heading-{{ loop.index }}">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index }}" aria-expanded="false" aria-controls="collapse-{{ loop.index }}">
-                            Summary for {{ summary.date }}
-                        </button>
-                    </h2>
-                    <div id="collapse-{{ loop.index }}" class="accordion-collapse collapse" aria-labelledby="heading-{{ loop.index }}" data-bs-parent="#historyAccordion">
-                        <div class="accordion-body" style="white-space: pre-wrap;">
-                            {{ summary.text }}
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
-        <div class="col-lg-4">
-            <!-- Sources for Today's Summary -->
-            <div class="card sources-card">
-                <div class="card-header">
-                    Sources for Today's Summary
-                </div>
-                <div class="list-group list-group-flush">
-                    {% for source in summaries[0].sources %}
-                        <a href="{{ source.url }}" target="_blank" class="list-group-item list-group-item-action">
-                            {{ source.title }}
-                        </a>
-                    {% else %}
-                        <div class="list-group-item">No sources were processed.</div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-    </div>
-{% endif %}
-{% endblock %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const refreshForm = document.getElementById('refresh-form');
+        const refreshButton = document.getElementById('refresh-button');
+        const refreshSpinner = document.getElementById('refresh-spinner');
+        const refreshText = document.getElementById('refresh-text');
 
+        if (refreshForm) {
+            refreshForm.addEventListener('submit', function() {
+                refreshText.textContent = 'Requested...';
+                refreshSpinner.style.display = 'inline-block';
+                refreshButton.disabled = true;
+            });
+        }
+
+        // This block checks the job status if the page is showing "Processing..."
+        const isProcessing = {{ processing_job | tojson }};
+        const ticker = '{{ selected_ticker }}';
+
+        if (isProcessing && ticker) {
+            const intervalId = setInterval(() => {
+                fetch(`/status/${ticker}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'complete') {
+                            clearInterval(intervalId);
+                            // Reload the page to show the new summary
+                            window.location.reload();
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error checking job status:', error);
+                        clearInterval(intervalId);
+                    });
+            }, 5000); // Check every 5 seconds
+        }
+    });
+</script>
+
+{% endblock %}
 
